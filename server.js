@@ -1,61 +1,53 @@
 import express from "express";
+import puppeteer from "puppeteer";
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-process.on("uncaughtException", console.error);
-process.on("unhandledRejection", console.error);
-
-async function scrapeFolder(folderUrl) {
-  const res = await fetch(folderUrl);
-  if (!res.ok) throw new Error("Failed to fetch folder");
-
-  const html = await res.text();
-
-  const match = html.match(/window\['_DRIVE_ivd'\]\s*=\s*'(.+?)';/);
-  if (!match) throw new Error("No folder data found. Make sure the folder is public.");
-
-  const escaped = match[1];
-  const decoded = escaped.replace(/\\x([0-9A-Fa-f]{2})/g, (_, hex) =>
-    String.fromCharCode(parseInt(hex, 16))
-  );
-
-  const rawJson = JSON.parse(decoded);
-  const items = [];
-
-  rawJson[0].forEach(entry => {
-    const id = entry[0];
-    const name = entry[2];
-    const mime = entry[3];
-    const isFolder = mime === "application/vnd.google-apps.folder";
-
-    if (isFolder) {
-      items.push({
-        id,
-        name,
-        type: "folder",
-        url: `https://drive.google.com/drive/folders/${id}`
-      });
-    } else if (name && name.toLowerCase().endsWith(".mp4")) {
-      items.push({
-        id,
-        name,
-        type: "file",
-        url: `https://drive.google.com/file/d/${id}/preview`
-      });
-    }
-  });
-
-  return items;
-}
+app.use(express.static("public"));
 
 app.get("/scrape", async (req, res) => {
   const { folder } = req.query;
-  if (!folder) return res.json({ error: "Missing ?folder=<drive-folder-link>" });
+  if (!folder) return res.json({ error: "Missing ?folder=" });
 
   try {
-    const files = await scrapeFolder(folder);
-    res.json({ count: files.length, files });
+    const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
+    const page = await browser.newPage();
+
+    await page.goto(folder, { waitUntil: "networkidle2" });
+
+    // Scroll to load everything
+    let previousHeight;
+    while (true) {
+      previousHeight = await page.evaluate("document.body.scrollHeight");
+      await page.evaluate("window.scrollTo(0, document.body.scrollHeight)");
+      await page.waitForTimeout(1000);
+      const newHeight = await page.evaluate("document.body.scrollHeight");
+      if (newHeight === previousHeight) break;
+    }
+
+    // Extract folder and MP4 info
+    const items = await page.evaluate(() => {
+      const list = [];
+      document.querySelectorAll("[role='listitem']").forEach(el => {
+        const nameEl = el.querySelector("[aria-label]");
+        if (!nameEl) return;
+        const name = nameEl.getAttribute("aria-label");
+        const linkEl = el.querySelector("a");
+        if (!linkEl) return;
+        const url = linkEl.href;
+        const isFolder = /\/folders\//.test(url);
+        list.push({
+          name,
+          url,
+          type: isFolder ? "folder" : name.toLowerCase().endsWith(".mp4") ? "file" : "other"
+        });
+      });
+      return list.filter(i => i.type === "folder" || i.type === "file");
+    });
+
+    await browser.close();
+    res.json({ count: items.length, files: items });
   } catch (err) {
     console.error(err);
     res.json({ error: err.message });
@@ -67,74 +59,57 @@ app.get("/", (req, res) => {
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Drive Scraper Player</title>
+  <title>Drive Puppeteer Scraper</title>
   <style>
-    body { font-family: sans-serif; padding: 20px; }
-    #list { margin-top: 20px; }
-    .item { margin: 5px 0; cursor: pointer; color: blue; text-decoration: underline; }
-    iframe { width: 100%; height: 500px; display: none; margin-top: 20px; }
-    button { padding: 5px 10px; margin-top: 10px; }
+    body { font-family:sans-serif; padding:20px; }
+    #list { margin-top:20px; }
+    .item { margin:5px 0; cursor:pointer; color:blue; text-decoration:underline; }
+    iframe { width:100%; height:500px; display:none; margin-top:20px; }
   </style>
 </head>
 <body>
-  <h2>Google Drive Scraper</h2>
-  <input id="folderInput" type="text" size="60" placeholder="Paste Google Drive folder link"/>
-  <button onclick="loadFolder()">Load Folder</button>
-  <button onclick="goBack()">⬅ Back</button>
-  <div id="list"></div>
-  <iframe id="player" frameborder="0" allowfullscreen></iframe>
+<h2>Google Drive Puppeteer Scraper</h2>
+<input id="folderUrl" type="text" size="60" placeholder="Paste Google Drive folder link"/>
+<button onclick="loadFolder()">Load Folder</button>
+<div id="list"></div>
+<iframe id="player" frameborder="0" allowfullscreen></iframe>
 
-  <script>
-    const historyStack = [];
+<script>
+async function loadFolder() {
+  const url = document.getElementById("folderUrl").value.trim();
+  if (!url) return alert("Enter folder link");
 
-    async function loadFolder(folderUrl) {
-      if (!folderUrl) folderUrl = document.getElementById("folderInput").value.trim();
-      if (!folderUrl) return alert("Please enter a folder link.");
+  const res = await fetch("/scrape?folder=" + encodeURIComponent(url));
+  const data = await res.json();
 
-      historyStack.push(folderUrl);
+  const list = document.getElementById("list");
+  list.innerHTML = "";
+  const player = document.getElementById("player");
+  player.style.display = "none";
+  player.src = "";
 
-      const res = await fetch("/scrape?folder=" + encodeURIComponent(folderUrl));
-      const data = await res.json();
+  if (data.error) {
+    list.innerHTML = "<p style='color:red'>" + data.error + "</p>";
+    return;
+  }
 
-      const list = document.getElementById("list");
-      list.innerHTML = "";
-      const player = document.getElementById("player");
-      player.style.display = "none";
-      player.src = "";
-
-      if (data.error) {
-        list.innerHTML = "<p style='color:red'>" + data.error + "</p>";
-        return;
+  data.files.forEach(item => {
+    const div = document.createElement("div");
+    div.className = "item";
+    div.textContent = (item.type === "folder" ? "📁 " : "🎬 ") + item.name;
+    div.onclick = () => {
+      if (item.type === "folder") {
+        document.getElementById("folderUrl").value = item.url;
+        loadFolder();
+      } else {
+        player.src = item.url;
+        player.style.display = "block";
       }
-
-      data.files.forEach(item => {
-        const div = document.createElement("div");
-        div.className = "item";
-        div.textContent = (item.type === "folder" ? "📁 " : "🎬 ") + item.name;
-
-        div.onclick = () => {
-          if (item.type === "folder") {
-            document.getElementById("folderInput").value = item.url;
-            loadFolder(item.url);
-          } else {
-            const player = document.getElementById("player");
-            player.src = item.url;
-            player.style.display = "block";
-          }
-        };
-
-        list.appendChild(div);
-      });
-    }
-
-    function goBack() {
-      if (historyStack.length > 1) {
-        historyStack.pop();
-        const last = historyStack.pop();
-        if (last) loadFolder(last);
-      }
-    }
-  </script>
+    };
+    list.appendChild(div);
+  });
+}
+</script>
 </body>
 </html>
   `);
