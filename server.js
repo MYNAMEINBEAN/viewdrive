@@ -82,37 +82,32 @@ app.get("/", (req, res) => {
   <button onclick="loadFolder()">Load Folder</button>
   <button onclick="goBack()">⬅ Back</button>
   <div id="list"></div>
-  <button id="loadMoreBtn" onclick="loadMore()" style="display:none;">Load More</button>
   <iframe id="player" frameborder="0" allowfullscreen></iframe>
 
   <script>
     const historyStack = [];
-    let currentFolder = null;
 
     async function loadFolder(folderUrl) {
       if (!folderUrl) folderUrl = document.getElementById("folderInput").value.trim();
       if (!folderUrl) return alert("Please enter a folder link.");
 
-      currentFolder = folderUrl;
       historyStack.push(folderUrl);
-
-      document.getElementById("list").innerHTML = "";
-      document.getElementById("player").style.display = "none";
 
       const res = await fetch("/scrape?folder=" + encodeURIComponent(folderUrl));
       const data = await res.json();
 
+      const list = document.getElementById("list");
+      list.innerHTML = "";
+      const player = document.getElementById("player");
+      player.style.display = "none";
+      player.src = "";
+
       if (data.error) {
-        document.getElementById("list").innerHTML = "<p style='color:red'>" + data.error + "</p>";
+        list.innerHTML = "<p style='color:red'>" + data.error + "</p>";
         return;
       }
 
-      renderList(data.files);
-    }
-
-    function renderList(files) {
-      const list = document.getElementById("list");
-      files.forEach(item => {
+      data.files.forEach(item => {
         const div = document.createElement("div");
         div.className = "item";
         div.textContent = (item.type === "folder" ? "📁 " : "🎬 ") + item.name;
@@ -130,9 +125,6 @@ app.get("/", (req, res) => {
 
         list.appendChild(div);
       });
-
-      // Show load more button if there might be more
-      document.getElementById("loadMoreBtn").style.display = "block";
     }
 
     function goBack() {
@@ -140,12 +132,6 @@ app.get("/", (req, res) => {
         historyStack.pop();
         const last = historyStack.pop();
         if (last) loadFolder(last);
-      }
-    }
-
-    function loadMore() {
-      if (currentFolder) {
-        loadFolder(currentFolder); // re-scrape current folder
       }
     }
   </script>
