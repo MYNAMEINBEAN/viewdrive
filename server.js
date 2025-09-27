@@ -3,7 +3,6 @@ import express from "express";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Error logging
 process.on("uncaughtException", console.error);
 process.on("unhandledRejection", console.error);
 
@@ -13,11 +12,9 @@ async function scrapeFolder(folderUrl) {
 
   const html = await res.text();
 
-  // Extract Google Drive JSON blob
   const match = html.match(/window\['_DRIVE_ivd'\]\s*=\s*'(.+?)';/);
   if (!match) throw new Error("No folder data found. Make sure the folder is public.");
 
-  // Decode \xHH escapes
   const escaped = match[1];
   const decoded = escaped.replace(/\\x([0-9A-Fa-f]{2})/g, (_, hex) =>
     String.fromCharCode(parseInt(hex, 16))
@@ -52,7 +49,6 @@ async function scrapeFolder(folderUrl) {
   return items;
 }
 
-// API endpoint for scraping
 app.get("/scrape", async (req, res) => {
   const { folder } = req.query;
   if (!folder) return res.json({ error: "Missing ?folder=<drive-folder-link>" });
@@ -66,13 +62,12 @@ app.get("/scrape", async (req, res) => {
   }
 });
 
-// HTML UI
 app.get("/", (req, res) => {
   res.send(`
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Google Drive Scraper Player</title>
+  <title>Drive Scraper Player</title>
   <style>
     body { font-family: sans-serif; padding: 20px; }
     #list { margin-top: 20px; }
@@ -87,32 +82,37 @@ app.get("/", (req, res) => {
   <button onclick="loadFolder()">Load Folder</button>
   <button onclick="goBack()">⬅ Back</button>
   <div id="list"></div>
+  <button id="loadMoreBtn" onclick="loadMore()" style="display:none;">Load More</button>
   <iframe id="player" frameborder="0" allowfullscreen></iframe>
 
   <script>
     const historyStack = [];
+    let currentFolder = null;
 
     async function loadFolder(folderUrl) {
       if (!folderUrl) folderUrl = document.getElementById("folderInput").value.trim();
       if (!folderUrl) return alert("Please enter a folder link.");
 
+      currentFolder = folderUrl;
       historyStack.push(folderUrl);
+
+      document.getElementById("list").innerHTML = "";
+      document.getElementById("player").style.display = "none";
 
       const res = await fetch("/scrape?folder=" + encodeURIComponent(folderUrl));
       const data = await res.json();
 
-      const list = document.getElementById("list");
-      list.innerHTML = "";
-      const player = document.getElementById("player");
-      player.style.display = "none";
-      player.src = "";
-
       if (data.error) {
-        list.innerHTML = "<p style='color:red'>" + data.error + "</p>";
+        document.getElementById("list").innerHTML = "<p style='color:red'>" + data.error + "</p>";
         return;
       }
 
-      data.files.forEach(item => {
+      renderList(data.files);
+    }
+
+    function renderList(files) {
+      const list = document.getElementById("list");
+      files.forEach(item => {
         const div = document.createElement("div");
         div.className = "item";
         div.textContent = (item.type === "folder" ? "📁 " : "🎬 ") + item.name;
@@ -122,6 +122,7 @@ app.get("/", (req, res) => {
             document.getElementById("folderInput").value = item.url;
             loadFolder(item.url);
           } else {
+            const player = document.getElementById("player");
             player.src = item.url;
             player.style.display = "block";
           }
@@ -129,13 +130,22 @@ app.get("/", (req, res) => {
 
         list.appendChild(div);
       });
+
+      // Show load more button if there might be more
+      document.getElementById("loadMoreBtn").style.display = "block";
     }
 
     function goBack() {
       if (historyStack.length > 1) {
-        historyStack.pop(); // remove current
-        const last = historyStack.pop(); // previous
+        historyStack.pop();
+        const last = historyStack.pop();
         if (last) loadFolder(last);
+      }
+    }
+
+    function loadMore() {
+      if (currentFolder) {
+        loadFolder(currentFolder); // re-scrape current folder
       }
     }
   </script>
