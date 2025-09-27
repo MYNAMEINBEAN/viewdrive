@@ -44,7 +44,7 @@ async function scrapeFolder(folderUrl) {
         id,
         name,
         type: "file",
-        url: `https://drive.google.com/uc?export=download&id=${id}`
+        url: `https://drive.google.com/file/d/${id}/preview`
       });
     }
   });
@@ -77,8 +77,8 @@ app.get("/", (req, res) => {
     body { font-family: sans-serif; padding: 20px; }
     #list { margin-top: 20px; }
     .item { margin: 5px 0; cursor: pointer; color: blue; text-decoration: underline; }
-    video { width: 100%; max-height: 500px; margin-top: 20px; display: none; }
-    button { padding: 5px 10px; }
+    iframe { width: 100%; height: 500px; display: none; margin-top: 20px; }
+    button { padding: 5px 10px; margin-top: 10px; }
   </style>
 </head>
 <body>
@@ -87,7 +87,7 @@ app.get("/", (req, res) => {
   <button onclick="loadFolder()">Load Folder</button>
   <button onclick="goBack()">⬅ Back</button>
   <div id="list"></div>
-  <video id="player" controls></video>
+  <iframe id="player" frameborder="0" allowfullscreen></iframe>
 
   <script>
     const historyStack = [];
@@ -124,7 +124,6 @@ app.get("/", (req, res) => {
           } else {
             player.src = item.url;
             player.style.display = "block";
-            player.play();
           }
         };
 
